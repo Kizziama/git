@@ -1,21 +1,12 @@
 #!/usr/bin/env bash
 #
-# Copyright © 2023 Kizziama <kizziama@proton.me>
+# Copyright © 2023-2024 Kizziama <kizziama@proton.me>
 #
 # SPDX-License-Identifier: Apache-2.0
 #
 
 Y='\033[1;33m'
 W='\033[1;37m'
-
-show_ascii() {
-	echo -e "$Y ╭╮╭━┳━━┳━━━━┳━━━━┳━━┳━━━┳━╮╭━┳━━━╮ "
-	echo -e "$Y ┃┃┃╭┻┫┣┻━━╮━┣━━╮━┣┫┣┫╭━╮┃┃╰╯┃┃╭━╮┃ "
-	echo -e "$Y ┃╰╯╯╱┃┃╱╱╭╯╭╯╱╭╯╭╯┃┃┃┃╱┃┃╭╮╭╮┃┃╱┃┃ "
-	echo -e "$Y ┃╭╮┃╱┃┃╱╭╯╭╯╱╭╯╭╯╱┃┃┃╰━╯┃┃┃┃┃┃╰━╯┃ "
-	echo -e "$Y ┃┃┃╰┳┫┣┳╯━╰━┳╯━╰━┳┫┣┫╭━╮┃┃┃┃┃┃╭━╮┃ "
-	echo -e "$Y ╰╯╰━┻━━┻━━━━┻━━━━┻━━┻╯╱╰┻╯╰╯╰┻╯╱╰╯ "
-}
 
 show_help() {
 	echo -e "$W Usage: $0 [options]"
@@ -130,7 +121,6 @@ options() {
 			shift
 			;;
 		-H | --help)
-			show_ascii
 			show_help
 			exit 0
 			;;
