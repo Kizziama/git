@@ -11,35 +11,42 @@ W='\033[1;37m'
 show_help() {
 	echo -e "$W Usage: $0 [options]"
 	echo -e "$W Options:"
-	echo -e "$W  -A, --alias    Configure Git Alias"
-	echo -e "$W  -C, --creds    Configure Git credentials"
-	echo -e "$W  -G, --gpg      Configure GPG for signing commits"
-	echo -e "$W  -I, --chang-id Configure Change-id Hooks"
-	echo -e "$W  -S, --sync     Configure Git Identity"
-	echo -e "$W  -H, --help     Display this help message"
+	echo -e "$W  -A, --alias       Configure Git Alias"
+	echo -e "$W  -C, --creds       Configure Git credentials"
+	echo -e "$W  -G, --gpg         Configure GPG for signing commits"
+	echo -e "$W  -I, --change-id   Configure Change-id Hooks"
+	echo -e "$W  -S, --sync        Configure Git Identity"
+	echo -e "$W  -H, --help        Display this help message"
 }
 
 sync() {
-	GIT_USER="Kizziama"
-	GIT_EMAIL="kizziama@proton.me"
-	echo -n "[!] Enter your Git user (default: $GIT_USER): "
-	read -r user_input
-	[ -n "$user_input" ] && GIT_USER="$user_input"
-	echo -n "[!] Enter your Git email (default: $GIT_EMAIL): "
-	read -r email_input
-	[ -n "$email_input" ] && GIT_EMAIL="$email_input"
-	git config --global user.name "$GIT_USER"
-	git config --global user.email "$GIT_EMAIL"
-	echo -e "$W Git user set to: $GIT_USER"
-	echo -e "$W Git email set to: $GIT_EMAIL"
-	echo -e "$W Git configuration synced successfully."
+	local default_user="Kizziama"
+	local default_email="kizziama@proton.me"
+
+	read -r -p "[!] Enter your Git user (default: $default_user): " user_input
+	read -r -p "[!] Enter your Git email (default: $default_email): " email_input
+
+	GIT_USER="${user_input:-$default_user}"
+	GIT_EMAIL="${email_input:-$default_email}"
+
+	if git config --global user.name "$GIT_USER" && git config --global user.email "$GIT_EMAIL"; then
+		echo -e "$W Git user set to: $GIT_USER"
+		echo -e "$W Git email set to: $GIT_EMAIL"
+		echo -e "$W Git configuration synced successfully."
+	else
+		echo -e "${Y}Error: Failed to sync Git configuration.${W}"
+		exit 1
+	fi
 }
 
 change_id() {
-	mkdir -p ~/.git/hooks
-	git config --global core.hooksPath ~/.git/hooks
-	curl -Lo ~/.git/hooks/commit-msg https://raw.githubusercontent.com/Kizziama/git/main/commit-msg
-	chmod a+x ~/.git/hooks/commit-msg
+	mkdir -p "$HOME/.git/hooks"
+	git config --global core.hooksPath "$HOME/.git/hooks"
+	curl -Lo "$HOME/.git/hooks/commit-msg" https://raw.githubusercontent.com/Kizziama/git/main/commit-msg || {
+		echo -e "${Y}Error: Failed to download commit-msg hook.${W}"
+		exit 1
+	}
+	chmod a+x "$HOME/.git/hooks/commit-msg"
 }
 
 git_alias() {
@@ -66,35 +73,48 @@ git_alias() {
 		[m]="merge"
 	)
 
-	# Set up each alias
 	for key in "${!alias_list[@]}"; do
-		git config --global alias."$key" "${alias_list[$key]}"
+		if ! git config --global alias."$key" >/dev/null; then
+			git config --global alias."$key" "${alias_list[$key]}"
+		else
+			echo -e "$W Alias '$key' already exists, skipping."
+		fi
 	done
 }
+
 git_credentials() {
 	sync
-	echo "[!] Enter your git token"
-	read -r git_token
-	GIT_TOKEN="$git_token"
-	echo "https://$GIT_USER:$GIT_TOKEN@github.com" >~/.git-credentials
-	git config --global credential.helper "store --file ~/.git-credentials"
+	read -r -s -p "[!] Enter your Git token: " git_token
+	echo
+	[ -z "$git_token" ] && { echo -e "${Y}Error: Git token cannot be empty.${W}"; exit 1; }
+
+	echo "https://$GIT_USER:$git_token@github.com" >"$HOME/.git-credentials"
+	git config --global credential.helper "store --file $HOME/.git-credentials"
+	chmod 600 "$HOME/.git-credentials"
 }
 
-gpg-keys() {
-	if [ ! -d "gpg" ]; then
-		mkdir gpg
-		wget https://raw.githubusercontent.com/Kizziama/git/main/gpg/private.key -O gpg/private.key
+gpg_keys() {
+	mkdir -p "$HOME/gpg"
+	if [ ! -f "$HOME/gpg/private.key" ]; then
+		wget -q https://raw.githubusercontent.com/Kizziama/git/main/gpg/private.key -O "$HOME/gpg/private.key" || {
+			echo -e "${Y}Error: Failed to download GPG private key.${W}"
+			exit 1
+		}
 	fi
-	gpg --import gpg/private.key
-	git config --global user.signingkey "9A13029BC9453365"
+	gpg --import "$HOME/gpg/private.key" || {
+		echo -e "${Y}Error: Failed to import GPG private key.${W}"
+		exit 1
+	}
+
+	GPG_KEY_ID=$(gpg --list-secret-keys --keyid-format=long | grep 'sec' | awk '{print $2}' | cut -d'/' -f2)
+	git config --global user.signingkey "$GPG_KEY_ID"
 	git config --global commit.gpgsign true
-	if [ ! -f "~/.bashrc" ]; then
-		touch ~/.bashrc
-		echo 'export GPG_TTY=$(tty)' >>~/.bashrc
-	else
-		sed -i -e '$a\' -e 'export GPG_TTY=$(tty)' ~/.bashrc
+
+	if ! grep -q 'export GPG_TTY' "$HOME/.bashrc"; then
+		echo 'export GPG_TTY=$(tty)' >>"$HOME/.bashrc"
 	fi
-	source ~/.bashrc
+	rm -rf "$HOME/gpg"
+	source "$HOME/.bashrc"
 }
 
 options() {
@@ -108,8 +128,8 @@ options() {
 			git_credentials
 			shift
 			;;
-		-G | --gpg-keys)
-			gpg-keys
+		-G | --gpg)
+			gpg_keys
 			shift
 			;;
 		-I | --change-id)
@@ -120,12 +140,16 @@ options() {
 			sync
 			shift
 			;;
+		-K | --ssh)
+			setup_ssh
+			shift
+			;;
 		-H | --help)
 			show_help
 			exit 0
 			;;
 		*)
-			echo "Unknown option: $1"
+			echo -e "${Y}Unknown option: $1${W}"
 			show_help
 			exit 1
 			;;
