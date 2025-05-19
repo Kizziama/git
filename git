@@ -7,34 +7,67 @@
 
 Y='\033[1;33m'
 W='\033[1;37m'
+N='\033[0m'
 
 show_help() {
-	echo -e "$W Usage: $0 [options]"
-	echo -e "$W Options:"
-	echo -e "$W  -A, --alias       Configure Git Alias"
-	echo -e "$W  -C, --creds       Configure Git credentials"
-	echo -e "$W  -G, --gpg         Configure GPG for signing commits"
-	echo -e "$W  -I, --change-id   Configure Change-id Hooks"
-	echo -e "$W  -S, --sync        Configure Git Identity"
-	echo -e "$W  -H, --help        Display this help message"
+	echo -e "${W}Usage: $0 [options]"
+	echo -e "${W}Options:"
+	echo -e "${W}  -A, --alias       Configure Git Aliases"
+	echo -e "${W}  -C, --creds       Authenticate and configure Git via GitHub CLI"
+	echo -e "${W}  -G, --gpg         Configure GPG for commit signing"
+	echo -e "${W}  -I, --change-id   Set up Change-id Git hook"
+	echo -e "${W}  -S, --sync        Manually set Git identity"
+	echo -e "${W}  -H, --help        Display this help message${N}"
+}
+
+install_gh() {
+	echo -e "${W}GitHub CLI not found. Installing...${N}"
+	if [[ "$OSTYPE" == "linux-gnu"* ]]; then
+		if command -v apt &>/dev/null; then
+			sudo apt update && sudo apt install -y gh
+		elif command -v dnf &>/dev/null; then
+			sudo dnf install -y gh
+		elif command -v pacman &>/dev/null; then
+			sudo pacman -Sy --noconfirm github-cli
+		else
+			echo -e "${Y}Unsupported package manager. Install GitHub CLI manually: https://cli.github.com${N}"
+			exit 1
+		fi
+	elif [[ "$OSTYPE" == "darwin"* ]]; then
+		if command -v brew &>/dev/null; then
+			brew install gh
+		else
+			echo -e "${Y}Homebrew not found. Install GitHub CLI manually: https://cli.github.com${N}"
+			exit 1
+		fi
+	else
+		echo -e "${Y}Unsupported OS. Install GitHub CLI manually: https://cli.github.com${N}"
+		exit 1
+	fi
+
+	if ! command -v gh &>/dev/null; then
+		echo -e "${Y}Installation failed. gh still not found.${N}"
+		exit 1
+	fi
 }
 
 sync() {
 	local default_user="Kizziama"
 	local default_email="kizziama@proton.me"
 
-	read -r -p "[!] Enter your Git user (default: $default_user): " user_input
-	read -r -p "[!] Enter your Git email (default: $default_email): " email_input
+	read -r -p "[!] Enter Git user (default: $default_user): " user_input
+	read -r -p "[!] Enter Git email (default: $default_email): " email_input
 
 	GIT_USER="${user_input:-$default_user}"
 	GIT_EMAIL="${email_input:-$default_email}"
 
-	if git config --global user.name "$GIT_USER" && git config --global user.email "$GIT_EMAIL"; then
-		echo -e "$W Git user set to: $GIT_USER"
-		echo -e "$W Git email set to: $GIT_EMAIL"
-		echo -e "$W Git configuration synced successfully."
+	if git config --global user.name "$GIT_USER" &&
+		git config --global user.email "$GIT_EMAIL"; then
+		echo -e "${W}Git user set to: $GIT_USER"
+		echo -e "${W}Git email set to: $GIT_EMAIL"
+		echo -e "${W}Git identity configured.${N}"
 	else
-		echo -e "${Y}Error: Failed to sync Git configuration.${W}"
+		echo -e "${Y}Error: Could not set Git identity.${N}"
 		exit 1
 	fi
 }
@@ -43,10 +76,11 @@ change_id() {
 	mkdir -p "$HOME/.git/hooks"
 	git config --global core.hooksPath "$HOME/.git/hooks"
 	curl -Lo "$HOME/.git/hooks/commit-msg" https://raw.githubusercontent.com/Kizziama/git/main/commit-msg || {
-		echo -e "${Y}Error: Failed to download commit-msg hook.${W}"
+		echo -e "${Y}Error: Failed to download commit-msg hook.${N}"
 		exit 1
 	}
 	chmod a+x "$HOME/.git/hooks/commit-msg"
+	echo -e "${W}Change-id hook installed.${N}"
 }
 
 git_alias() {
@@ -74,47 +108,82 @@ git_alias() {
 	)
 
 	for key in "${!alias_list[@]}"; do
-		if ! git config --global alias."$key" >/dev/null; then
+		if ! git config --global alias."$key" &>/dev/null; then
 			git config --global alias."$key" "${alias_list[$key]}"
 		else
-			echo -e "$W Alias '$key' already exists, skipping."
+			echo -e "${W}Alias '$key' already exists, skipping.${N}"
 		fi
 	done
+	echo -e "${W}Git aliases set.${N}"
 }
 
 git_credentials() {
-	sync
-	read -r -s -p "[!] Enter your Git token: " git_token
-	echo
-	[ -z "$git_token" ] && { echo -e "${Y}Error: Git token cannot be empty.${W}"; exit 1; }
+	if ! command -v gh &>/dev/null; then
+		install_gh
+	fi
 
-	echo "https://$GIT_USER:$git_token@github.com" >"$HOME/.git-credentials"
-	git config --global credential.helper "store --file $HOME/.git-credentials"
-	chmod 600 "$HOME/.git-credentials"
+	if ! gh auth status &>/dev/null; then
+		echo -e "${W}Authenticating GitHub CLI...${N}"
+		gh auth login
+	else
+		echo -e "${W}GitHub CLI already authenticated.${N}"
+	fi
+
+	GH_USERNAME=$(gh api user --jq .login)
+	GH_EMAIL=$(gh api user/emails --jq '.[0].email')
+
+	if [ -z "$GH_USERNAME" ] || [ -z "$GH_EMAIL" ]; then
+		echo -e "${Y}Failed to retrieve GitHub identity.${N}"
+		exit 1
+	fi
+
+	git config --global user.name "$GH_USERNAME"
+	git config --global user.email "$GH_EMAIL"
+	git config --global credential.helper "!gh auth git-credential"
+
+	echo -e "${W}Git identity configured via GitHub:${N}"
+	echo -e "${W}  Name : $GH_USERNAME"
+	echo -e "${W}  Email: $GH_EMAIL${N}"
 }
 
 gpg_keys() {
+	echo -e "${W}Setting up GPG signing key...${N}"
 	mkdir -p "$HOME/gpg"
+
 	if [ ! -f "$HOME/gpg/private.key" ]; then
 		wget -q https://raw.githubusercontent.com/Kizziama/git/main/gpg/private.key -O "$HOME/gpg/private.key" || {
-			echo -e "${Y}Error: Failed to download GPG private key.${W}"
+			echo -e "${Y}Error: Failed to download GPG private key.${N}"
 			exit 1
 		}
 	fi
-	gpg --import "$HOME/gpg/private.key" || {
-		echo -e "${Y}Error: Failed to import GPG private key.${W}"
-		exit 1
-	}
 
-	GPG_KEY_ID=$(gpg --list-secret-keys --keyid-format=long | grep 'sec' | awk '{print $2}' | cut -d'/' -f2)
+	if gpg --import "$HOME/gpg/private.key" >/dev/null 2>&1; then
+		echo -e "${W}GPG key imported.${N}"
+	else
+		echo -e "${Y}Failed to import GPG key.${N}"
+		rm -f "$HOME/gpg/private.key"
+		exit 1
+	fi
+
+	GPG_KEY_ID=$(gpg --list-secret-keys --keyid-format=long | grep '^sec' | head -n 1 | awk '{print $2}' | cut -d'/' -f2)
+
+	if [ -z "$GPG_KEY_ID" ]; then
+		echo -e "${Y}No GPG key ID found.${N}"
+		exit 1
+	fi
+
 	git config --global user.signingkey "$GPG_KEY_ID"
 	git config --global commit.gpgsign true
 
-	if ! grep -q 'export GPG_TTY' "$HOME/.bashrc"; then
-		echo 'export GPG_TTY=$(tty)' >>"$HOME/.bashrc"
-	fi
+	for shell_rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
+		if [ -f "$shell_rc" ] && ! grep -q 'GPG_TTY' "$shell_rc"; then
+			echo 'export GPG_TTY=$(tty)' >>"$shell_rc"
+		fi
+	done
+
+	export GPG_TTY=$(tty)
 	rm -rf "$HOME/gpg"
-	source "$HOME/.bashrc"
+	echo -e "${W}GPG signing enabled with key: $GPG_KEY_ID${N}"
 }
 
 options() {
@@ -140,16 +209,12 @@ options() {
 			sync
 			shift
 			;;
-		-K | --ssh)
-			setup_ssh
-			shift
-			;;
 		-H | --help)
 			show_help
 			exit 0
 			;;
 		*)
-			echo -e "${Y}Unknown option: $1${W}"
+			echo -e "${Y}Unknown option: $1${N}"
 			show_help
 			exit 1
 			;;
